@@ -1,0 +1,7 @@
+.env
+*.db
+.venv/
+__pycache__/
+Consigne.md
+Q&A.md
+

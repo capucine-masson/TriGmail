@@ -1,0 +1,53 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="card">
+  <h2>Nouveau dossier</h2>
+  <p class="muted">Chaque dossier crée un libellé Gmail <strong>TriMail/&lt;nom&gt;</strong>. La description sert à classer tes mails : sois précis.</p>
+  <form id="folder-form" class="form" autocomplete="off">
+    <label>Nom
+      <input id="f-name" name="name" maxlength="50" required placeholder="Factures">
+    </label>
+    <label>Description
+      <textarea id="f-desc" name="description" maxlength="500" rows="3" required placeholder="Factures, reçus et avis de paiement"></textarea>
+    </label>
+    <div class="row">
+      <button type="submit" class="btn primary" id="f-submit">Créer le dossier</button>
+      <button type="button" class="btn ghost hidden" id="f-cancel">Annuler</button>
+    </div>
+  </form>
+</section>
+
+<section>
+  <h2 class="section-title">Mes dossiers</h2>
+  <div id="folders" class="grid" aria-live="polite">
+    <div class="card skeleton"></div>
+    <div class="card skeleton"></div>
+    <div class="card skeleton"></div>
+  </div>
+  <p id="empty" class="muted hidden">Aucun dossier pour l'instant. Crée le premier ci-dessus.</p>
+</section>
+
+<section>
+  <h2 class="section-title">Tri de mes mails</h2>
+  <div class="card">
+    <p class="muted">Analyse les 20 derniers mails (reçus et envoyés). L'aperçu ne modifie rien : les libellés ne sont posés que quand tu cliques sur « Appliquer ».</p>
+    <div class="row">
+      <button type="button" class="btn primary" id="analyze-btn">Analyser mes 20 derniers mails</button>
+      <button type="button" class="btn ghost" id="apply-btn" disabled>Appliquer</button>
+    </div>
+    <ul id="results" class="results" aria-live="polite"></ul>
+  </div>
+</section>
+
+<div id="chat-panel" class="chat-panel hidden" aria-live="polite">
+  <button type="button" class="chat-close" id="chat-close" aria-label="Fermer la réponse">&times;</button>
+  <div id="chat-loading" class="skeleton chat-skeleton hidden"></div>
+  <p id="chat-answer" class="chat-answer"></p>
+  <ul id="chat-sources" class="chat-sources"></ul>
+  <p id="chat-query" class="muted chat-query"></p>
+</div>
+<form id="chat-form" class="chat-bar" autocomplete="off">
+  <input id="chat-input" maxlength="500" required placeholder="Retrouver un mail : « le mail de la banque de la semaine dernière »">
+  <button type="submit" class="btn primary" id="chat-send">Demander</button>
+</form>
+{% endblock %}
