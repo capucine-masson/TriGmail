@@ -15,14 +15,9 @@ async def connect() -> aiosqlite.Connection:
 
 
 async def init_db(conn: aiosqlite.Connection) -> None:
-    """Exécute schema.sql si la base est vide (aucune table)."""
-    async with conn.execute(
-        "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table'"
-    ) as cur:
-        (count,) = await cur.fetchone()
-    if count == 0:
-        await conn.executescript(SCHEMA_PATH.read_text(encoding="utf-8"))
-        await conn.commit()
+    """Exécute schema.sql (CREATE TABLE IF NOT EXISTS : les nouvelles tables arrivent seules)."""
+    await conn.executescript(SCHEMA_PATH.read_text(encoding="utf-8"))
+    await conn.commit()
 
 
 class FolderExists(Exception):
@@ -109,27 +104,56 @@ async def save_classification(
     await conn.commit()
 
 
-async def get_pending(
-    conn: aiosqlite.Connection, message_ids: list[str], min_confidence: float
-) -> list[dict]:
-    """Classements à appliquer parmi message_ids : non appliqués, confiance suffisante."""
-    pending = []
-    for message_id in message_ids:
-        async with conn.execute(
-            "SELECT c.message_id, f.gmail_label_id FROM classifications c "
-            "JOIN folders f ON f.id = c.folder_id "
-            "WHERE c.message_id = ? AND c.applied = 0 AND c.confidence >= ? "
-            "AND f.gmail_label_id IS NOT NULL",
-            (message_id, min_confidence),
-        ) as cur:
-            row = await cur.fetchone()
-        if row:
-            pending.append(dict(row))
-    return pending
+async def get_done(conn: aiosqlite.Connection, message_ids: list[str]) -> set[str]:
+    """Mails déjà traités : libellé posé, ou examinés sans dossier. Une question en attente
+    (dossier proposé, rien appliqué) n'en fait pas partie : elle est reposée au tri suivant."""
+    if not message_ids:
+        return set()
+    marks = ",".join("?" * len(message_ids))
+    async with conn.execute(
+        f"SELECT message_id FROM classifications WHERE message_id IN ({marks}) "
+        "AND (applied = 1 OR folder_id IS NULL)",
+        message_ids,
+    ) as cur:
+        return {row["message_id"] for row in await cur.fetchall()}
 
 
-async def mark_applied(conn: aiosqlite.Connection, message_id: str) -> None:
+async def forget_unmatched(conn: aiosqlite.Connection) -> None:
+    """Oublie les mails examinés sans dossier (la description d'un dossier a changé : à revoir)."""
+    await conn.execute("DELETE FROM classifications WHERE applied = 0 AND folder_id IS NULL")
+    await conn.commit()
+
+
+async def get_setting(conn: aiosqlite.Connection, key: str, default: str) -> str:
+    async with conn.execute("SELECT value FROM settings WHERE key = ?", (key,)) as cur:
+        row = await cur.fetchone()
+    return row["value"] if row else default
+
+
+async def set_setting(conn: aiosqlite.Connection, key: str, value: str) -> None:
     await conn.execute(
-        "UPDATE classifications SET applied = 1 WHERE message_id = ?", (message_id,)
+        "INSERT INTO settings (key, value) VALUES (?, ?) "
+        "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+        (key, value),
+    )
+    await conn.commit()
+
+
+async def get_rules(conn: aiosqlite.Connection) -> dict[str, dict[int, bool]]:
+    """Réponses mémorisées : {adresse: {folder_id: l'expéditeur va dans ce dossier ?}}."""
+    rules: dict[str, dict[int, bool]] = {}
+    async with conn.execute("SELECT address, folder_id, is_match FROM sender_rules") as cur:
+        for row in await cur.fetchall():
+            rules.setdefault(row["address"], {})[row["folder_id"]] = bool(row["is_match"])
+    return rules
+
+
+async def set_rule(
+    conn: aiosqlite.Connection, address: str, folder_id: int, is_match: bool
+) -> None:
+    await conn.execute(
+        "INSERT INTO sender_rules (address, folder_id, is_match) VALUES (?, ?, ?) "
+        "ON CONFLICT(address, folder_id) DO UPDATE SET is_match = excluded.is_match",
+        (address, folder_id, int(is_match)),
     )
     await conn.commit()

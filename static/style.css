@@ -177,7 +177,14 @@ input:focus, textarea:focus { outline: none; border-color: var(--blue); box-shad
 .toast.error { background: var(--red); }
 .toast.ok { background: var(--green); }
 
-@keyframes spin { to { transform: rotate(360deg); } }
+#sort-period { cursor: pointer; font: inherit; }
+.auto-row { display: flex; align-items: center; gap: .5rem; font-size: .9rem; cursor: pointer; }
+/* Le nombre total de mails n'est pas connu d'avance : barre qui défile, pleine à la fin. */
+.progress { height: 8px; border-radius: 999px; background: #e8eefc; overflow: hidden; }
+.progress-bar { height: 100%; width: 35%; border-radius: 999px; background: var(--blue); animation: slide 1.2s ease-in-out infinite; }
+.progress.done .progress-bar { width: 100%; background: var(--green); animation: none; }
+@keyframes slide { from { transform: translateX(-100%); } to { transform: translateX(300%); } }
+@keyframes spin{ to { transform: rotate(360deg); } }
 @keyframes shimmer { to { background-position: -200% 0; } }
 @keyframes pop { from { opacity: 0; transform: translateY(6px); } }
 
@@ -190,3 +197,10 @@ input:focus, textarea:focus { outline: none; border-color: var(--blue); box-shad
 @media (prefers-reduced-motion: reduce) {
   * { animation: none !important; transition: none !important; }
 }
+
+/* Assistant IA */
+.label-line { display: flex; align-items: center; justify-content: space-between; gap: .5rem; }
+.btn.magic { color: #8a4fff; }
+.btn.magic:hover:not(:disabled) { background: rgba(138, 79, 255, .1); }
+.folder.suggestion { border-left-color: #8a4fff; background: rgba(138, 79, 255, .04); }
+.folder .examples { font-size: .8rem; font-style: italic; }

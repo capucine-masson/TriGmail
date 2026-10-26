@@ -8,7 +8,10 @@
     <label>Nom
       <input id="f-name" name="name" maxlength="50" required placeholder="Factures">
     </label>
-    <label>Description
+    <label>
+      <span class="label-line">Description
+        <button type="button" class="btn ghost small magic" id="f-improve" title="Améliorer la description avec l'IA">✨ Améliorer</button>
+      </span>
       <textarea id="f-desc" name="description" maxlength="500" rows="3" required placeholder="Factures, reçus et avis de paiement"></textarea>
     </label>
     <div class="row">
@@ -21,7 +24,11 @@
 <!-- Mes dossiers : liste + tri des mails -->
 <section id="view-folders" class="view view-split hidden">
   <div class="pane">
-    <h2>Dossiers</h2>
+    <div class="pane-head">
+      <h2>Dossiers</h2>
+      <button type="button" class="btn ghost small magic" id="suggest-btn" title="L'IA cherche des groupes de mails sans dossier">✨ Suggérer</button>
+    </div>
+    <div id="suggestions" class="list" aria-live="polite"></div>
     <div id="folders" class="list" aria-live="polite">
       <div class="skeleton row-skeleton"></div>
       <div class="skeleton row-skeleton"></div>
@@ -30,12 +37,23 @@
   </div>
   <div class="pane">
     <div class="pane-head">
-      <h2>Tri des 20 derniers mails</h2>
+      <h2>Trier ma boîte</h2>
       <div class="row">
-        <button type="button" class="btn primary small" id="analyze-btn">Analyser</button>
-        <button type="button" class="btn ghost small" id="apply-btn" disabled>Appliquer</button>
+        <select id="sort-period" class="btn ghost small" aria-label="Période à trier">
+          <option value="1d">Dernier jour</option>
+          <option value="7d">7 derniers jours</option>
+          <option value="1m">Dernier mois</option>
+          <option value="3m" selected>3 derniers mois</option>
+        </select>
+        <button type="button" class="btn primary small" id="sort-btn">Trier</button>
+        <button type="button" class="btn ghost small hidden" id="stop-btn">Arrêter</button>
       </div>
     </div>
+    <label class="auto-row"><input type="checkbox" id="auto-toggle"> Trier automatiquement les nouveaux mails</label>
+    <p id="auto-status" class="muted"></p>
+    <div id="sort-progress" class="progress hidden" role="progressbar" aria-label="Progression du tri"><div class="progress-bar"></div></div>
+    <p id="sort-status" class="muted" aria-live="polite">Choisis la période puis clique sur Trier. Les mails dont l'appli est sûre reçoivent leur libellé automatiquement. En cas de doute, elle te pose la question.</p>
+    <div id="questions" class="list" aria-live="polite"></div>
     <ul id="results" class="list" aria-live="polite"></ul>
   </div>
 </section>

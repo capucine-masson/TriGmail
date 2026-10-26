@@ -29,6 +29,10 @@ URL_RE = re.compile(r"https?://\S+")
 HEADER_RE = re.compile(r"^(Thread ID|Subject|From|To|Cc|Bcc|Date): ?(.*)$")
 
 
+class QuotaExceeded(RuntimeError):
+    """Quota de l'API Gmail dépassé (limite par minute)."""
+
+
 class GmailMCP:
     def __init__(self) -> None:
         self._stack = AsyncExitStack()
@@ -65,7 +69,9 @@ class GmailMCP:
         text = "\n".join(c.text for c in result.content if getattr(c, "type", "") == "text")
         # Ce serveur signale souvent ses erreurs par un texte « Error: ... » sans is_error.
         if result.is_error or text.startswith("Error"):
-            raise RuntimeError(f"Erreur MCP sur {name}")
+            if "Quota exceeded" in text:
+                raise QuotaExceeded(f"Quota Gmail dépassé sur {name}")
+            raise RuntimeError(f"Erreur MCP sur {name} : {text[:200]}")
         return text
 
     # --- Libellés ---
@@ -93,13 +99,17 @@ class GmailMCP:
 
     async def label_message_ids(self, folder_name: str) -> set[str]:
         """Ids des mails portant déjà le libellé TriMail/<nom>."""
-        safe = folder_name.replace('"', "")
-        mails = await self.search_mails(f'label:"{LABEL_PREFIX}{safe}"', 100)
+        mails = await self.search_mails(f"label:{label_query(folder_name)}", 100)
         return {m["id"] for m in mails}
 
     async def read_mail(self, message_id: str, max_chars: int = MAIL_EXCERPT_CHARS) -> dict:
         text = await self.call("read_email", {"messageId": message_id})
         return parse_mail(text, max_chars)
+
+
+def label_query(folder_name: str) -> str:
+    """Libellé TriMail/<nom> prêt à suivre « label: » dans une requête Gmail."""
+    return '"' + LABEL_PREFIX + folder_name.replace('"', "") + '"'
 
 
 def parse_search(text: str) -> list[dict]:
@@ -148,3 +158,27 @@ def parse_mail(text: str, max_chars: int = MAIL_EXCERPT_CHARS) -> dict:
     body = URL_RE.sub("[lien]", body)
     mail["body"] = re.sub(r"\s+", " ", body).strip()[:max_chars]
     return mail
+
+
+ADDRESS_RE = re.compile(r"<([^<>@\s]+@[^<>\s]+)>|([^<>@\s]+@[^<>\s]+)")
+
+
+def sender_address(raw: str) -> str | None:
+    """Adresse e-mail (en minuscules) d'un en-tête From, ou None."""
+    found = ADDRESS_RE.search(raw)
+    return (found.group(1) or found.group(2)).lower() if found else None
+
+
+def group_senders(mails: list[dict]) -> list[dict]:
+    """Regroupe des mails par adresse d'expéditeur : [{name, address, count, subject}]."""
+    groups: dict[str, dict] = {}
+    for mail in mails:
+        address = sender_address(mail["from"])
+        if not address:
+            continue
+        name = re.sub(r"\s*<.*>\s*$", "", mail["from"]).strip().strip('"') or address
+        group = groups.setdefault(
+            address, {"name": name, "address": address, "count": 0, "subject": mail["subject"].strip()}
+        )
+        group["count"] += 1
+    return list(groups.values())

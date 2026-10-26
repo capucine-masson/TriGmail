@@ -16,8 +16,8 @@ function toast(message, kind) {
   toast.timer = setTimeout(() => el.classList.remove("show"), 4000);
 }
 
-async function api(method, url, body) {
-  const options = { method, headers: {} };
+async function api(method, url, body, signal) {
+  const options = { method, headers: {}, signal };
   if (body !== undefined) {
     options.headers["Content-Type"] = "application/json";
     options.body = JSON.stringify(body);
@@ -26,6 +26,7 @@ async function api(method, url, body) {
   try {
     res = await fetch(url, options);
   } catch (e) {
+    if (e.name === "AbortError") throw e;
     throw new Error("Le serveur est injoignable.");
   }
   if (res.status === 204) return null;
@@ -117,6 +118,76 @@ cancelBtn.addEventListener("click", () => {
   location.hash = "#folders";
 });
 
+// --- Assistant IA : description et suggestions de dossiers ---
+
+const improveBtn = $("#f-improve");
+const suggestBtn = $("#suggest-btn");
+const suggestionsEl = $("#suggestions");
+
+improveBtn.addEventListener("click", () => {
+  const description = $("#f-desc").value.trim();
+  if (!description) {
+    toast("Écris d'abord une description à améliorer.", "error");
+    $("#f-desc").focus();
+    return;
+  }
+  withBusy(improveBtn, async () => {
+    try {
+      const data = await api("POST", "/api/folders/improve-description", {
+        name: $("#f-name").value,
+        description,
+      });
+      $("#f-desc").value = data.description;
+      toast("Description améliorée : relis-la avant d'enregistrer.", "ok");
+    } catch (e) {
+      toast(e.message, "error");
+    }
+  });
+});
+
+function suggestionCard(s) {
+  const card = el("article", "card folder suggestion");
+  const head = el("div", "folder-head");
+  head.append(el("h3", "", "✨ " + s.name));
+  const actions = el("div", "actions");
+  const create = el("button", "btn primary small", "Créer");
+  const ignore = el("button", "btn ghost small", "Ignorer");
+  ignore.addEventListener("click", () => card.remove());
+  create.addEventListener("click", () =>
+    withBusy(create, async () => {
+      try {
+        await api("POST", "/api/folders", { name: s.name, description: s.description });
+        card.remove();
+        toast("Dossier « " + s.name + " » créé.", "ok");
+        await loadFolders();
+      } catch (e) {
+        toast(e.message, "error");
+      }
+    })
+  );
+  actions.append(create, ignore);
+  head.append(actions);
+  card.append(head, el("p", "", s.description));
+  card.append(el("p", "examples", s.count + " mails concernés, par ex. : " + s.subjects.join(" · ")));
+  return card;
+}
+
+suggestBtn.addEventListener("click", () => {
+  withBusy(suggestBtn, async () => {
+    suggestionsEl.replaceChildren();
+    try {
+      const data = await api("POST", "/api/folders/suggest");
+      if (data.suggestions.length === 0) {
+        toast("Aucun nouveau dossier à suggérer pour l'instant.");
+      } else {
+        suggestionsEl.replaceChildren(...data.suggestions.map(suggestionCard));
+      }
+    } catch (e) {
+      toast(e.message, "error");
+    }
+  });
+});
+
 // --- Navigation (vues) ---
 
 const VIEWS = ["new", "folders", "chat"];
@@ -168,29 +239,32 @@ async function removeFolder(folder, button) {
   });
 }
 
-// --- Tri des mails ---
+// --- Tri de la boîte ---
 
-const analyzeBtn = $("#analyze-btn");
-const applyBtn = $("#apply-btn");
+const sortBtn = $("#sort-btn");
+const stopBtn = $("#stop-btn");
+const statusEl = $("#sort-status");
+const progressEl = $("#sort-progress");
+const periodEl = $("#sort-period");
+const questionsEl = $("#questions");
 const resultsEl = $("#results");
-let previewIds = [];
+let stopRequested = false;
+let sortAbort = null;
 
 function badge(text, kind) {
-  const el = document.createElement("span");
-  el.className = "badge " + kind;
-  el.textContent = text;
-  return el;
+  const node = document.createElement("span");
+  node.className = "badge " + kind;
+  node.textContent = text;
+  return node;
 }
 
 function percent(value) {
   return Math.round(value * 100) + " %";
 }
 
-function resultRow(r) {
+function mailRow(r, badges) {
   const li = document.createElement("li");
   li.className = "result";
-  li.dataset.id = r.message_id;
-
   const sender = document.createElement("div");
   sender.className = "sender";
   sender.textContent = r.from || "(expéditeur inconnu)";
@@ -199,72 +273,164 @@ function resultRow(r) {
   subject.textContent = r.subject || "(sans objet)";
   const meta = document.createElement("div");
   meta.className = "meta";
-
-  if (r.status === "proposed") {
-    meta.append(badge("→ " + r.folder_name + " · " + percent(r.confidence), "proposed"));
-  } else if (r.status === "low") {
-    meta.append(badge("Non classé", ""), badge("plus probable : " + r.folder_name + " · " + percent(r.confidence), "low"));
-  } else if (r.status === "already") {
-    meta.append(badge("Déjà dans " + r.folder_name, "already"));
-  } else if (r.status === "unclassified") {
-    meta.append(badge("Non classé", ""));
-  } else {
-    meta.append(badge("Erreur : " + (r.error || "inconnue"), "error"));
-  }
+  meta.append(...badges);
   li.append(sender, subject, meta);
   return li;
 }
 
-function showSkeletons() {
-  const items = [];
-  for (let i = 0; i < 5; i++) {
-    const li = document.createElement("li");
-    li.className = "skeleton result-skeleton";
-    items.push(li);
-  }
-  resultsEl.replaceChildren(...items);
+async function sendAnswer(r, yes) {
+  return api("POST", "/api/answer", { message_id: r.message_id, folder_id: r.folder_id, yes });
 }
 
-analyzeBtn.addEventListener("click", () => {
-  withBusy(analyzeBtn, async () => {
-    applyBtn.disabled = true;
-    showSkeletons();
+function questionCard(r) {
+  const card = el("article", "card folder suggestion question");
+  card.dataset.address = r.address || "";
+  card.dataset.id = r.message_id;
+  card.append(el("h3", "", "Ce mail va-t-il dans « " + r.folder_name + " » ?"));
+  card.append(el("p", "", (r.from || "(expéditeur inconnu)") + " : " + (r.subject || "(sans objet)")));
+  const actions = el("div", "actions");
+  const yes = el("button", "btn primary small", "Oui");
+  const no = el("button", "btn ghost small", "Non");
+  for (const [button, answer] of [[yes, true], [no, false]]) {
+    button.addEventListener("click", () =>
+      withBusy(button, async () => {
+        try {
+          await sendAnswer(r, answer);
+          answeredIds.add(r.message_id);
+          card.remove();
+          if (answer) resultsEl.prepend(mailRow(r, [badge("→ " + r.folder_name, "proposed")]));
+          await answerSameSender(r, answer);
+        } catch (e) {
+          toast(e.message, "error");
+        }
+      })
+    );
+  }
+  actions.append(yes, no);
+  card.append(actions);
+  return card;
+}
+
+// Même expéditeur, même réponse : les autres questions en attente sont réglées d'un coup.
+async function answerSameSender(r, yes) {
+  if (!r.address) return;
+  for (const card of [...questionsEl.children]) {
+    if (card.dataset.address !== r.address) continue;
+    const other = card.questionData;
+    if (!other || other.folder_id !== r.folder_id) continue;
     try {
-      const data = await api("POST", "/api/analyze");
-      resultsEl.replaceChildren(...data.results.map(resultRow));
-      previewIds = data.results.filter((r) => r.status === "proposed").map((r) => r.message_id);
-      applyBtn.disabled = previewIds.length === 0;
-      if (data.results.length === 0) toast("Aucun mail à analyser.");
+      await sendAnswer(other, yes);
+      answeredIds.add(other.message_id);
+      card.remove();
+      if (yes) resultsEl.prepend(mailRow(other, [badge("→ " + other.folder_name, "proposed")]));
     } catch (e) {
-      resultsEl.replaceChildren();
       toast(e.message, "error");
+      return;
+    }
+  }
+}
+
+const answeredIds = new Set();
+
+function addQuestion(r) {
+  if (answeredIds.has(r.message_id) || questionsEl.querySelector('[data-id="' + r.message_id + '"]')) return;
+  const card = questionCard(r);
+  card.questionData = r;
+  questionsEl.append(card);
+}
+
+stopBtn.addEventListener("click", () => {
+  stopRequested = true;
+  stopBtn.disabled = true;
+  if (sortAbort) sortAbort.abort();
+});
+
+sortBtn.addEventListener("click", () => {
+  withBusy(sortBtn, async () => {
+    stopRequested = false;
+    sortAbort = new AbortController();
+    stopBtn.disabled = false;
+    stopBtn.classList.remove("hidden");
+    resultsEl.replaceChildren();
+    questionsEl.replaceChildren();
+    progressEl.classList.remove("hidden", "done");
+    let before = null;
+    let reached = "";
+    let scanned = 0, labeled = 0, asked = 0, failed = 0;
+    const summary = (finished) =>
+      (reached && !finished ? "Jusqu'au " + reached + " · " : "") +
+      scanned + " mails examinés · " + labeled + " classés · " + asked + " question(s)" +
+      (failed ? " · " + failed + " en erreur" : "") + (finished ? "" : "…");
+    try {
+      do {
+        statusEl.textContent = summary(false);
+        const data = await api("POST", "/api/sort", { before, period: periodEl.value }, sortAbort.signal);
+        scanned += data.scanned;
+        for (const r of data.results) {
+          if (r.status === "labeled") {
+            labeled += 1;
+            resultsEl.append(mailRow(r, [badge("→ " + r.folder_name + " · " + percent(r.confidence), "proposed")]));
+          } else if (r.status === "ask") {
+            asked += 1;
+            addQuestion(r);
+          } else if (r.status === "error") {
+            failed += 1;
+            resultsEl.append(mailRow(r, [badge("Erreur : " + (r.error || "inconnue"), "error")]));
+          }
+        }
+        before = data.next_before;
+        if (before !== null) reached = new Date(before * 1000).toLocaleDateString("fr-FR", { day: "numeric", month: "short", year: "numeric" });
+      } while (before !== null && !stopRequested);
+      statusEl.textContent = summary(true) + (before !== null ? " (arrêté)" : " · terminé");
+      if (before === null) progressEl.classList.add("done");
+      else progressEl.classList.add("hidden");
+    } catch (e) {
+      progressEl.classList.add("hidden");
+      if (e.name === "AbortError") {
+        statusEl.textContent = summary(true) + " (arrêté)";
+      } else {
+        statusEl.textContent = summary(true) + " (interrompu)";
+        toast(e.message, "error");
+      }
+    } finally {
+      stopBtn.classList.add("hidden");
     }
   });
 });
 
-applyBtn.addEventListener("click", () => {
-  withBusy(applyBtn, async () => {
-    try {
-      const data = await api("POST", "/api/apply", { message_ids: previewIds });
-      let ok = 0;
-      for (const r of data.results) {
-        const row = resultsEl.querySelector('[data-id="' + r.message_id + '"] .meta');
-        if (!row) continue;
-        if (r.ok) {
-          ok += 1;
-          row.append(badge("Appliqué ✓", "done"));
-        } else {
-          row.append(badge("Échec : " + r.error, "error"));
-        }
-      }
-      previewIds = data.results.filter((r) => !r.ok).map((r) => r.message_id);
-      toast(ok + " libellé(s) posé(s) dans Gmail.", ok ? "ok" : "error");
-    } catch (e) {
-      toast(e.message, "error");
-    }
-    applyBtn.disabled = previewIds.length === 0;
-  });
+// --- Tri automatique des nouveaux mails ---
+
+const autoToggle = $("#auto-toggle");
+const autoStatus = $("#auto-status");
+
+async function refreshAuto() {
+  try {
+    const data = await api("GET", "/api/auto");
+    autoToggle.checked = data.enabled;
+    autoStatus.textContent = !data.enabled
+      ? "Tri automatique désactivé."
+      : (data.last_check
+          ? "Dernier relevé à " + data.last_check.slice(11, 16) + " · " + data.labeled + " mail(s) classé(s) automatiquement"
+          : "Premier relevé dans un instant…") + " (tant que l'appli est ouverte)";
+    for (const q of data.questions) addQuestion(q);
+  } catch (e) {
+    /* le prochain passage réessaiera */
+  }
+}
+
+autoToggle.addEventListener("change", async () => {
+  try {
+    await api("POST", "/api/auto", { enabled: autoToggle.checked });
+  } catch (e) {
+    toast(e.message, "error");
+  }
+  refreshAuto();
 });
+
+refreshAuto();
+setInterval(() => {
+  if (!document.hidden) refreshAuto();
+}, 15000);
 
 // --- Chat de recherche (lecture seule) ---
 
@@ -327,7 +493,7 @@ function fillAnswer(bubble, data) {
     bubble.append(el("p", "verdict", "Je n'ai trouvé aucun mail qui corresponde clairement à ta question."));
   } else if (data.mode === "sure") {
     bubble.append(el("p", "verdict sure", "Voici le mail :"));
-    bubble.append(mailCard(data.matches[0], 0, true));
+    bubble.append(mailCard(data.matches[0], 0, false));
   } else {
     bubble.append(el("p", "verdict", "Je ne suis pas certain. Voici les plus probables, du plus au moins sûr :"));
     const list = el("div", "mail-list");
