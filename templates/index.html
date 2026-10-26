@@ -1,9 +1,10 @@
 {% extends "base.html" %}
 {% block content %}
-<section class="card">
-  <h2>Nouveau dossier</h2>
-  <p class="muted">Chaque dossier crée un libellé Gmail <strong>TriMail/&lt;nom&gt;</strong>. La description sert à classer tes mails : sois précis.</p>
+<!-- Accueil : créer un dossier -->
+<section id="view-new" class="view view-center">
   <form id="folder-form" class="form" autocomplete="off">
+    <h2 id="form-title">Nouveau dossier</h2>
+    <p class="muted">Crée le libellé Gmail <strong>TriMail/&lt;nom&gt;</strong>. La description sert à classer tes mails.</p>
     <label>Nom
       <input id="f-name" name="name" maxlength="50" required placeholder="Factures">
     </label>
@@ -17,37 +18,43 @@
   </form>
 </section>
 
-<section>
-  <h2 class="section-title">Mes dossiers</h2>
-  <div id="folders" class="grid" aria-live="polite">
-    <div class="card skeleton"></div>
-    <div class="card skeleton"></div>
-    <div class="card skeleton"></div>
-  </div>
-  <p id="empty" class="muted hidden">Aucun dossier pour l'instant. Crée le premier ci-dessus.</p>
-</section>
-
-<section>
-  <h2 class="section-title">Tri de mes mails</h2>
-  <div class="card">
-    <p class="muted">Analyse les 20 derniers mails (reçus et envoyés). L'aperçu ne modifie rien : les libellés ne sont posés que quand tu cliques sur « Appliquer ».</p>
-    <div class="row">
-      <button type="button" class="btn primary" id="analyze-btn">Analyser mes 20 derniers mails</button>
-      <button type="button" class="btn ghost" id="apply-btn" disabled>Appliquer</button>
+<!-- Mes dossiers : liste + tri des mails -->
+<section id="view-folders" class="view view-split hidden">
+  <div class="pane">
+    <h2>Dossiers</h2>
+    <div id="folders" class="list" aria-live="polite">
+      <div class="skeleton row-skeleton"></div>
+      <div class="skeleton row-skeleton"></div>
     </div>
-    <ul id="results" class="results" aria-live="polite"></ul>
+    <p id="empty" class="muted hidden">Aucun dossier. Crée-en un depuis l'accueil.</p>
+  </div>
+  <div class="pane">
+    <div class="pane-head">
+      <h2>Tri des 20 derniers mails</h2>
+      <div class="row">
+        <button type="button" class="btn primary small" id="analyze-btn">Analyser</button>
+        <button type="button" class="btn ghost small" id="apply-btn" disabled>Appliquer</button>
+      </div>
+    </div>
+    <ul id="results" class="list" aria-live="polite"></ul>
   </div>
 </section>
 
-<div id="chat-panel" class="chat-panel hidden" aria-live="polite">
-  <button type="button" class="chat-close" id="chat-close" aria-label="Fermer la réponse">&times;</button>
-  <div id="chat-loading" class="skeleton chat-skeleton hidden"></div>
-  <p id="chat-answer" class="chat-answer"></p>
-  <ul id="chat-sources" class="chat-sources"></ul>
-  <p id="chat-query" class="muted chat-query"></p>
-</div>
-<form id="chat-form" class="chat-bar" autocomplete="off">
-  <input id="chat-input" maxlength="500" required placeholder="Retrouver un mail : « le mail de la banque de la semaine dernière »">
-  <button type="submit" class="btn primary" id="chat-send">Demander</button>
-</form>
+<!-- Chat : retrouver un mail -->
+<section id="view-chat" class="view view-chat hidden">
+  <div id="chat-log" class="chat-log" aria-live="polite">
+    <div id="chat-hint" class="chat-hint">
+      <p>Décris le mail que tu cherches : expéditeur, sujet, période…</p>
+      <div class="chips">
+        <button type="button" class="chip">Le mail de ma dernière commande</button>
+        <button type="button" class="chip">La facture reçue la semaine dernière</button>
+        <button type="button" class="chip">Le mail de confirmation de mon abonnement</button>
+      </div>
+    </div>
+  </div>
+  <form id="chat-form" class="chat-bar" autocomplete="off">
+    <input id="chat-input" maxlength="500" required placeholder="Ex. : le mail de la banque de la semaine dernière">
+    <button type="submit" class="btn primary" id="chat-send">Demander</button>
+  </form>
+</section>
 {% endblock %}

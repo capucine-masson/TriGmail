@@ -58,6 +58,8 @@ function folderCard(folder) {
   const card = document.createElement("article");
   card.className = "card folder";
 
+  const head = document.createElement("div");
+  head.className = "folder-head";
   const title = document.createElement("h3");
   title.textContent = folder.name;
   const desc = document.createElement("p");
@@ -75,7 +77,8 @@ function folderCard(folder) {
   del.addEventListener("click", () => removeFolder(folder, del));
   actions.append(edit, del);
 
-  card.append(title, desc, actions);
+  head.append(title, actions);
+  card.append(head, desc);
   return card;
 }
 
@@ -95,8 +98,9 @@ function startEdit(folder) {
   $("#f-name").value = folder.name;
   $("#f-desc").value = folder.description;
   submitBtn.textContent = "Enregistrer";
+  $("#form-title").textContent = "Modifier le dossier";
   cancelBtn.classList.remove("hidden");
-  form.scrollIntoView({ behavior: "smooth", block: "center" });
+  location.hash = "#new";
   $("#f-name").focus();
 }
 
@@ -104,10 +108,30 @@ function resetForm() {
   editingId = null;
   form.reset();
   submitBtn.textContent = "Créer le dossier";
+  $("#form-title").textContent = "Nouveau dossier";
   cancelBtn.classList.add("hidden");
 }
 
-cancelBtn.addEventListener("click", resetForm);
+cancelBtn.addEventListener("click", () => {
+  resetForm();
+  location.hash = "#folders";
+});
+
+// --- Navigation (vues) ---
+
+const VIEWS = ["new", "folders", "chat"];
+
+function showView() {
+  const name = VIEWS.includes(location.hash.slice(1)) ? location.hash.slice(1) : "new";
+  for (const v of VIEWS) $("#view-" + v).classList.toggle("hidden", v !== name);
+  for (const a of document.querySelectorAll(".tabs a")) {
+    a.classList.toggle("active", a.dataset.view === name);
+  }
+  if (name === "folders") loadFolders();
+  if (name === "chat") $("#chat-input").focus();
+}
+
+window.addEventListener("hashchange", showView);
 
 form.addEventListener("submit", async (event) => {
   event.preventDefault();
@@ -121,8 +145,9 @@ form.addEventListener("submit", async (event) => {
         await api("PUT", "/api/folders/" + editingId, payload);
         toast("Dossier mis à jour.", "ok");
       }
+      const wasEditing = editingId !== null;
       resetForm();
-      await loadFolders();
+      if (wasEditing) location.hash = "#folders";
     } catch (e) {
       toast(e.message, "error");
     }
@@ -246,40 +271,102 @@ applyBtn.addEventListener("click", () => {
 const chatForm = $("#chat-form");
 const chatInput = $("#chat-input");
 const chatSend = $("#chat-send");
-const chatPanel = $("#chat-panel");
+const chatLog = $("#chat-log");
 
-$("#chat-close").addEventListener("click", () => chatPanel.classList.add("hidden"));
+function addBubble(kind) {
+  const el = document.createElement("div");
+  el.className = "bubble " + kind;
+  $("#chat-hint")?.remove();
+  chatLog.append(el);
+  chatLog.scrollTop = chatLog.scrollHeight;
+  return el;
+}
+
+function shortDate(raw) {
+  const d = new Date(raw);
+  return isNaN(d) ? raw : d.toLocaleDateString("fr-FR", { day: "numeric", month: "short", year: "numeric" });
+}
+
+function el(tag, className, text) {
+  const node = document.createElement(tag);
+  if (className) node.className = className;
+  if (text !== undefined) node.textContent = text;
+  return node;
+}
+
+function senderName(raw) {
+  return raw.replace(/\s*<.*>\s*$/, "").replace(/^"|"$/g, "") || raw;
+}
+
+function mailCard(match, rank, expanded) {
+  const tier = match.score >= 0.8 ? "high" : match.score >= 0.5 ? "mid" : "low";
+  const card = el("article", "mail-card " + tier);
+
+  const head = el("div", "mail-head");
+  if (rank) head.append(el("span", "rank", String(rank)));
+  head.append(el("h3", "mail-subject", match.subject || "(sans objet)"));
+  head.append(el("span", "score", percent(match.score)));
+
+  const meta = el("div", "mail-meta", senderName(match.from) + " · " + shortDate(match.date));
+  card.append(head, meta);
+  if (match.reason) card.append(el("p", "reason", match.reason));
+
+  const details = el("details", "mail-details");
+  details.open = expanded;
+  details.append(el("summary", "", "Contenu du mail"));
+  details.append(el("p", "mail-body", match.body || "(contenu vide)"));
+  card.append(details);
+  return card;
+}
+
+function fillAnswer(bubble, data) {
+  bubble.replaceChildren();
+  bubble.classList.add("wide");
+
+  if (data.mode === "none") {
+    bubble.append(el("p", "verdict", "Je n'ai trouvé aucun mail qui corresponde clairement à ta question."));
+  } else if (data.mode === "sure") {
+    bubble.append(el("p", "verdict sure", "Voici le mail :"));
+    bubble.append(mailCard(data.matches[0], 0, true));
+  } else {
+    bubble.append(el("p", "verdict", "Je ne suis pas certain. Voici les plus probables, du plus au moins sûr :"));
+    const list = el("div", "mail-list");
+    data.matches.forEach((m, i) => list.append(mailCard(m, i + 1, false)));
+    bubble.append(list);
+  }
+  bubble.append(el("div", "queries", "Recherche Gmail : " + data.queries.join("  ·  ")));
+}
+
+for (const chip of document.querySelectorAll(".chip")) {
+  chip.addEventListener("click", () => {
+    chatInput.value = chip.textContent;
+    chatInput.focus();
+  });
+}
 
 chatForm.addEventListener("submit", (event) => {
   event.preventDefault();
   const question = chatInput.value.trim();
   if (!question) return;
   withBusy(chatSend, async () => {
+    chatInput.value = "";
     chatInput.disabled = true;
-    chatPanel.classList.remove("hidden");
-    $("#chat-loading").classList.remove("hidden");
-    $("#chat-answer").textContent = "";
-    $("#chat-sources").replaceChildren();
-    $("#chat-query").textContent = "";
+    addBubble("user").textContent = question;
+    const bot = addBubble("bot");
+    const dots = document.createElement("span");
+    dots.className = "spinner";
+    bot.append(dots);
     try {
-      const data = await api("POST", "/api/chat", { question });
-      $("#chat-answer").textContent = data.answer;
-      $("#chat-sources").replaceChildren(
-        ...data.sources.map((s) => {
-          const li = document.createElement("li");
-          li.textContent = s.from + " — " + s.date + " — " + s.subject;
-          return li;
-        })
-      );
-      $("#chat-query").textContent = "Recherche Gmail : " + data.query;
+      fillAnswer(bot, await api("POST", "/api/chat", { question }));
     } catch (e) {
-      chatPanel.classList.add("hidden");
-      toast(e.message, "error");
+      bot.classList.add("error");
+      bot.textContent = e.message;
     } finally {
-      $("#chat-loading").classList.add("hidden");
       chatInput.disabled = false;
+      chatInput.focus();
+      chatLog.scrollTop = chatLog.scrollHeight;
     }
   });
 });
 
-loadFolders();
+showView();

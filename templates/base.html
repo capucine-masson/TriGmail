@@ -11,12 +11,16 @@
 </head>
 <body>
   <header class="topbar">
-    <div class="brand">
+    <a class="brand" href="#new" aria-label="Accueil : nouveau dossier">
       <span class="logo" aria-hidden="true"><i></i><i></i><i></i><i></i></span>
       <span class="brand-name">TriMail</span>
-    </div>
+    </a>
+    <nav class="tabs">
+      <a href="#folders" data-view="folders">Mes dossiers</a>
+      <a href="#chat" data-view="chat">Chat</a>
+    </nav>
   </header>
-  <main class="container">
+  <main class="main">
     {% block content %}{% endblock %}
   </main>
   <div id="toast" class="toast" role="status" aria-live="polite"></div>

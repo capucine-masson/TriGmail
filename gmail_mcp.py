@@ -2,6 +2,7 @@ import asyncio
 import os
 import re
 from contextlib import AsyncExitStack
+from html import unescape
 
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
@@ -96,9 +97,9 @@ class GmailMCP:
         mails = await self.search_mails(f'label:"{LABEL_PREFIX}{safe}"', 100)
         return {m["id"] for m in mails}
 
-    async def read_mail(self, message_id: str) -> dict:
+    async def read_mail(self, message_id: str, max_chars: int = MAIL_EXCERPT_CHARS) -> dict:
         text = await self.call("read_email", {"messageId": message_id})
-        return parse_mail(text)
+        return parse_mail(text, max_chars)
 
 
 def parse_search(text: str) -> list[dict]:
@@ -111,11 +112,25 @@ def parse_search(text: str) -> list[dict]:
             if key in ("ID", "Subject", "From", "Date"):
                 mail[key.lower()] = value
         if "id" in mail:
-            mails.append(mail)
+            mails.append({"subject": "", "from": "", "date": "", **mail})
     return mails
 
 
-def parse_mail(text: str) -> dict:
+HTML_NOISE_RE = re.compile(r"(?is)<(style|script|head)\b.*?</\1\s*>|<!--.*?-->|<!DOCTYPE[^>]*>?")
+TAG_RE = re.compile(r"<[^>]+>")
+HTML_NOTE_RE = re.compile(r"^\[Note: This email is HTML-formatted[^\]]*\]\s*")
+
+
+def html_to_text(body: str) -> str:
+    """Garde le texte lisible d'un mail HTML (sans CSS, scripts ni balises)."""
+    body = HTML_NOTE_RE.sub("", body.lstrip())
+    if "<" not in body:
+        return body
+    body = HTML_NOISE_RE.sub(" ", body)
+    return unescape(TAG_RE.sub(" ", body))
+
+
+def parse_mail(text: str, max_chars: int = MAIL_EXCERPT_CHARS) -> dict:
     """Extrait objet, expéditeur, date et un extrait nettoyé du corps (non fiable)."""
     mail = {"subject": "", "from": "", "date": ""}
     lines = text.splitlines()
@@ -129,6 +144,7 @@ def parse_mail(text: str) -> dict:
         elif lines[i].strip():
             break
         i += 1
-    body = URL_RE.sub("[lien]", "\n".join(lines[i:]))
-    mail["body"] = re.sub(r"\s+", " ", body).strip()[:MAIL_EXCERPT_CHARS]
+    body = html_to_text("\n".join(lines[i:]))
+    body = URL_RE.sub("[lien]", body)
+    mail["body"] = re.sub(r"\s+", " ", body).strip()[:max_chars]
     return mail

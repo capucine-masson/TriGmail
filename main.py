@@ -70,7 +70,13 @@ class FolderIn(BaseModel):
 
 ANALYZE_COUNT = 20
 PARALLEL = 5
-CHAT_RESULTS = 5
+CHAT_RESULTS = 5  # mails affichés au maximum
+CHAT_READ = 8  # mails lus puis classés par le modèle
+CHAT_PER_QUERY = 4
+CHAT_BODY_CHARS = 1500
+CHAT_MIN_SCORE = 0.25
+CHAT_SURE_SCORE = 0.8
+CHAT_SURE_GAP = 0.15  # écart minimal avec le 2e pour annoncer « le bon mail »
 # Une seule analyse/application à la fois (anti double-clic côté serveur).
 busy_lock = asyncio.Lock()
 
@@ -107,6 +113,7 @@ def error_text(exc: Exception) -> str:
 
 
 def gmail_error(exc: Exception) -> HTTPException:
+    print(f"[gmail] {type(exc).__name__}: {exc}")  # jamais de secret dans ces messages
     if isinstance(exc, (asyncio.TimeoutError, TimeoutError)):
         return HTTPException(504, "Gmail met trop de temps à répondre (timeout).")
     return HTTPException(502, "Erreur Gmail : impossible d'effectuer l'opération.")
@@ -274,33 +281,58 @@ async def apply_labels(request: Request, body: ApplyIn):
 
 @app.post("/api/chat")
 async def chat(request: Request, body: ChatIn):
-    """Retrouve un mail : question -> requête Gmail -> recherche -> réponse. Lecture seule."""
+    """Retrouve un mail : question -> requêtes Gmail -> recherche -> classement. Lecture seule."""
     mcp = mcp_or_503(request)
     try:
-        query = await llm.build_search_query(body.question, date.today().isoformat())
-        found = await mcp.search_mails(query, CHAT_RESULTS)
+        queries = await llm.build_search_queries(body.question, date.today().isoformat())
+        per_query = [await mcp.search_mails(q, CHAT_PER_QUERY) for q in queries]
+        # Meilleurs résultats de chaque requête en alternance : une requête large ne prend pas toute la place.
+        found: list[dict] = []
+        seen: set[str] = set()
+        for rank in range(CHAT_PER_QUERY):
+            for results in per_query:
+                if rank < len(results) and results[rank]["id"] not in seen:
+                    seen.add(results[rank]["id"])
+                    found.append(results[rank])
+        found = found[:CHAT_READ]
         if not found:
-            return {
-                "answer": "Je n'ai trouvé aucun mail correspondant à ta question.",
-                "query": query,
-                "sources": [],
-            }
+            return {"mode": "none", "matches": [], "queries": queries}
         sem = asyncio.Semaphore(PARALLEL)
 
         async def read_one(mail: dict) -> dict:
             try:
                 async with sem:
-                    full = await mcp.read_mail(mail["id"])
+                    full = await mcp.read_mail(mail["id"], CHAT_BODY_CHARS)
                 mail["body"] = full["body"]
             except Exception:
                 mail["body"] = ""
             return mail
 
         mails = await asyncio.gather(*(read_one(m) for m in found))
-        answer = await llm.answer_question(body.question, mails)
+        ranked = await llm.rank_mails(body.question, mails, date.today().isoformat(), CHAT_RESULTS)
     except llm.LLMError as exc:
         raise HTTPException(502, str(exc)) from exc
     except Exception as exc:
         raise gmail_error(exc) from exc
-    sources = [{"from": m["from"], "date": m["date"], "subject": m["subject"]} for m in mails]
-    return {"answer": answer, "query": query, "sources": sources}
+
+    matches = [
+        {
+            "from": mails[r["index"]]["from"],
+            "subject": mails[r["index"]]["subject"].strip(),
+            "date": mails[r["index"]]["date"],
+            "body": mails[r["index"]].get("body", ""),
+            "score": r["score"],
+            "reason": r["reason"],
+        }
+        for r in ranked
+        if r["score"] >= CHAT_MIN_SCORE
+    ]
+    if not matches:
+        mode = "none"
+    elif matches[0]["score"] >= CHAT_SURE_SCORE and (
+        len(matches) == 1 or matches[0]["score"] - matches[1]["score"] >= CHAT_SURE_GAP
+    ):
+        mode, matches = "sure", matches[:1]
+    else:
+        mode = "list"
+    return {"mode": mode, "matches": matches, "queries": queries}
